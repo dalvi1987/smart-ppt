@@ -1,0 +1,17 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Launch SmartPPT.API",
+      "type": "coreclr",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/SmartPPT.API/bin/Debug/net8.0/SmartPPT.API.dll",
+      "args": [],
+      "cwd": "${workspaceFolder}/src/SmartPPT.API",
+      "stopAtEntry": false,
+      "env": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      }
+    }
+  ]
+}
