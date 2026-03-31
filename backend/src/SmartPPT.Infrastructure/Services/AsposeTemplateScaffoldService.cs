@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Diagnostics;
 using Aspose.Slides;
 using Aspose.Slides.Charts;
 using SmartPPT.Infrastructure.Models;
@@ -50,10 +51,10 @@ public class AsposeTemplateScaffoldService : ITemplateScaffoldGeneratorService
 
     private static TemplateScaffoldSlide BuildSlideScaffold(ISlide slide, int slideNumber)
     {
-        var titleText = string.Empty;
-        var bullets = new List<string>();
+        var placeholders = new List<TemplateScaffoldPlaceholder>();
         var charts = new List<TemplateScaffoldChart>();
         var tables = new List<TemplateScaffoldTable>();
+        var chartIndex = 0;
 
         foreach (var shape in slide.Shapes)
         {
@@ -62,10 +63,10 @@ public class AsposeTemplateScaffoldService : ITemplateScaffoldGeneratorService
                 switch (shape)
                 {
                     case IAutoShape autoShape:
-                        ExtractText(autoShape, ref titleText, bullets);
+                        ExtractPlaceholders(autoShape, placeholders);
                         break;
                     case IChart chart:
-                        charts.Add(ExtractChart(chart));
+                        charts.Add(ExtractChart(chart, chartIndex++));
                         break;
                     case ITable table:
                         tables.Add(ExtractTable(table));
@@ -81,56 +82,124 @@ public class AsposeTemplateScaffoldService : ITemplateScaffoldGeneratorService
         return new TemplateScaffoldSlide
         {
             SlideNumber = slideNumber,
-            SlideType = ResolveSlideType(charts.Count, tables.Count, bullets.Count),
-            TitleText = string.IsNullOrWhiteSpace(titleText) ? null : titleText,
-            BulletPlaceholders = bullets,
+            SlideType = "Custom",
+            Placeholders = placeholders,
             Charts = charts,
             Tables = tables
         };
     }
 
-    private static void ExtractText(IAutoShape autoShape, ref string titleText, List<string> bullets)
+    private static void ExtractPlaceholders(IAutoShape autoShape, List<TemplateScaffoldPlaceholder> placeholders)
     {
         if (autoShape.TextFrame is null)
         {
             return;
         }
 
-        var placeholderType = autoShape.Placeholder?.Type;
-        var paragraphs = autoShape.TextFrame.Paragraphs;
-        foreach (var paragraph in paragraphs)
+        var fullText = ReadTextFrameText(autoShape.TextFrame).Trim();
+        if (string.IsNullOrWhiteSpace(fullText))
         {
-            var text = paragraph.Text?.Trim();
-            if (string.IsNullOrWhiteSpace(text))
-            {
-                continue;
-            }
+            return;
+        }
 
-            var isBullet = paragraph.ParagraphFormat?.Bullet?.Type != BulletType.None;
-            if (isBullet)
-            {
-                bullets.Add(text);
-                continue;
-            }
+        LogDebug($"Shape text extracted: '{fullText}'");
 
-            if (string.IsNullOrWhiteSpace(titleText) &&
-                (placeholderType == PlaceholderType.Title || placeholderType == PlaceholderType.CenteredTitle))
-            {
-                titleText = text;
-                continue;
-            }
-
-            if (string.IsNullOrWhiteSpace(titleText))
-            {
-                titleText = text;
-            }
+        foreach (var placeholder in ExtractPlaceholderEntries(fullText))
+        {
+            placeholders.Add(placeholder);
+            LogDebug($"Detected placeholder: key='{placeholder.Key}', raw='{placeholder.RawText}'");
         }
     }
 
-    private static TemplateScaffoldChart ExtractChart(IChart chart)
+    private static string ReadTextFrameText(ITextFrame textFrame)
+    {
+        var builder = new StringBuilder();
+
+        foreach (var paragraph in textFrame.Paragraphs)
+        {
+            foreach (var portion in paragraph.Portions)
+            {
+                if (!string.IsNullOrEmpty(portion.Text))
+                {
+                    builder.Append(portion.Text);
+                }
+            }
+        }
+
+        return builder.ToString();
+    }
+
+    private static IEnumerable<TemplateScaffoldPlaceholder> ExtractPlaceholderEntries(string text)
+    {
+        var results = new List<TemplateScaffoldPlaceholder>();
+        var startIndex = 0;
+
+        while (startIndex < text.Length)
+        {
+            var openIndex = text.IndexOf("{{", startIndex, StringComparison.Ordinal);
+            if (openIndex < 0)
+            {
+                break;
+            }
+
+            var closeIndex = text.IndexOf("}}", openIndex + 2, StringComparison.Ordinal);
+            var rawText = closeIndex >= 0
+                ? text.Substring(openIndex, closeIndex - openIndex + 2)
+                : text[openIndex..];
+
+            var keySource = rawText.StartsWith("{{", StringComparison.Ordinal)
+                ? rawText[2..]
+                : rawText;
+
+            var closingMarkerIndex = keySource.IndexOf("}}", StringComparison.Ordinal);
+            if (closingMarkerIndex >= 0)
+            {
+                keySource = keySource[..closingMarkerIndex];
+            }
+
+            var key = CleanPlaceholderKey(keySource);
+            if (!string.IsNullOrWhiteSpace(key))
+            {
+                results.Add(new TemplateScaffoldPlaceholder
+                {
+                    Key = key,
+                    RawText = rawText.Trim(),
+                    Type = "Text"
+                });
+            }
+
+            startIndex = openIndex + 2;
+        }
+
+        return results;
+    }
+
+    private static string CleanPlaceholderKey(string rawKey)
+    {
+        var builder = new StringBuilder();
+
+        foreach (var ch in rawKey.Trim())
+        {
+            if (char.IsLetterOrDigit(ch) || ch == '_' || ch == '-' || ch == '.')
+            {
+                builder.Append(char.ToLowerInvariant(ch));
+            }
+        }
+
+        return builder.ToString();
+    }
+
+    private static void LogDebug(string message)
+    {
+        Debug.WriteLine($"[AsposeTemplateScaffold] {message}");
+        Trace.WriteLine($"[AsposeTemplateScaffold] {message}");
+    }
+
+    private static TemplateScaffoldChart ExtractChart(IChart chart, int chartIndex)
     {
         var scaffold = new TemplateScaffoldChart
         {
+            ChartIndex = chartIndex,
             ChartType = chart.Type.ToString()
         };
 
@@ -182,14 +251,6 @@ public class AsposeTemplateScaffoldService : ITemplateScaffoldGeneratorService
         };
     }
 
-    private static string ResolveSlideType(int chartCount, int tableCount, int bulletCount)
-    {
-        if (chartCount > 0) return "Chart";
-        if (tableCount > 0) return "Table";
-        if (bulletCount > 0) return "Bullet";
-        return "Title";
-    }
-
     private static string BuildScript(TemplateScaffold scaffold)
     {
         var builder = new StringBuilder();
@@ -200,14 +261,10 @@ public class AsposeTemplateScaffoldService : ITemplateScaffoldGeneratorService
         for (var i = 0; i < scaffold.Slides.Count; i++)
         {
             var slide = scaffold.Slides[i];
-            var bulletPlaceholders = slide.BulletPlaceholders.Count == 0
-                ? new List<string> { "{{bullet_1}}", "{{bullet_2}}" }
-                : slide.BulletPlaceholders;
             builder.AppendLine("    {");
             builder.AppendLine($"      slideNumber: {slide.SlideNumber},");
             builder.AppendLine($"      slideType: {JsonSerializer.Serialize(slide.SlideType)},");
-            builder.AppendLine($"      title: {JsonSerializer.Serialize(slide.TitleText ?? "{{title}}")},");
-            builder.AppendLine($"      bullets: {JsonSerializer.Serialize(bulletPlaceholders)},");
+            builder.AppendLine($"      placeholders: {JsonSerializer.Serialize(slide.Placeholders)},");
             builder.AppendLine($"      charts: {JsonSerializer.Serialize(slide.Charts)},");
             builder.AppendLine($"      tables: {JsonSerializer.Serialize(slide.Tables)}");
             builder.Append("    }");
