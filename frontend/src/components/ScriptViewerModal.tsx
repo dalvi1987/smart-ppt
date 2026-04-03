@@ -80,7 +80,7 @@ export function ScriptViewerModal({
         <div
           className="modal-header"
           style={{
-            background: "#185FA5",
+            background: "#165EDA",
             padding: "14px 18px",
             borderBottom: "none",
             flexShrink: 0,
