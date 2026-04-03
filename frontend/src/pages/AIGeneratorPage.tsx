@@ -79,6 +79,14 @@ export function AIGeneratorPage() {
   };
 
   const handleGenerate = async () => {
+    if (!selectedTemplate) {
+      addNotification({
+        type: "error",
+        message: "Select a template first (go to Templates tab)",
+      });
+      return;
+    }
+
     if (!aiPrompt.trim()) {
       addNotification({ type: "error", message: "Please enter a prompt" });
       return;
@@ -87,6 +95,7 @@ export function AIGeneratorPage() {
     setAiResult(null);
     try {
       const result = await aiApi.generate({
+        templateId: selectedTemplate.id,
         prompt: aiPrompt,
         provider,
         model,

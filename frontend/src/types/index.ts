@@ -65,6 +65,7 @@ export interface AiGenerationResult {
 }
 
 export interface AiGenerateRequest {
+  templateId: string;
   prompt: string;
   provider: AiProvider;
   model: string;

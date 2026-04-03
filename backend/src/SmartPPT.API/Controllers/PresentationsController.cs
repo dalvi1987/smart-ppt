@@ -1,9 +1,11 @@
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 using SmartPPT.Application.AI;
 using SmartPPT.Application.Presentations;
 using SmartPPT.Application.Templates.Commands;
 using SmartPPT.Domain.Enums;
+using SmartPPT.Domain.Interfaces;
 
 namespace SmartPPT.API.Controllers;
 
@@ -13,7 +15,18 @@ namespace SmartPPT.API.Controllers;
 public class PresentationsController : ControllerBase
 {
     private readonly IMediator _mediator;
-    public PresentationsController(IMediator mediator) => _mediator = mediator;
+    private readonly ITemplateAwareAiService _templateAwareAiService;
+    private readonly ILogger<PresentationsController> _logger;
+
+    public PresentationsController(
+        IMediator mediator,
+        ITemplateAwareAiService templateAwareAiService,
+        ILogger<PresentationsController> logger)
+    {
+        _mediator = mediator;
+        _templateAwareAiService = templateAwareAiService;
+        _logger = logger;
+    }
 
     /// <summary>Get all presentations</summary>
     [HttpGet]
@@ -31,24 +44,74 @@ public class PresentationsController : ControllerBase
         return result == null ? NotFound() : Ok(result);
     }
 
-    /// <summary>Generate a PPTX from manual JSON input</summary>
+    /// <summary>Generate a PPTX from prepared slide JSON</summary>
     [HttpPost("generate")]
     [ProducesResponseType(typeof(PresentationDto), 201)]
     public async Task<IActionResult> Generate([FromBody] GeneratePresentationRequest req, CancellationToken ct)
     {
+        if (string.IsNullOrWhiteSpace(req.SlideJson))
+        {
+            return BadRequest(new { error = "slideJson is required for PPT generation." });
+        }
+
+        _logger.LogInformation("Aspose PPT generation triggered (no AI) for template {TemplateId}", req.TemplateId);
+
         var result = await _mediator.Send(new GeneratePresentationCommand(
-            req.TemplateId, req.Title, req.SlideJson, GenerationSource.ManualJson), ct);
+            req.TemplateId,
+            req.Title,
+            req.SlideJson,
+            GenerationSource.ManualJson,
+            req.PromptUsed), ct);
+
         return CreatedAtAction(nameof(GetById), new { id = result.Id }, result);
     }
 
-    /// <summary>Generate PPTX from AI-produced JSON (pass the slideJson from /ai/generate)</summary>
+    /// <summary>Generate structured slide JSON from a natural language prompt</summary>
     [HttpPost("generate-from-ai")]
-    [ProducesResponseType(typeof(PresentationDto), 201)]
+    [ProducesResponseType(typeof(AiGenerationResult), 200)]
     public async Task<IActionResult> GenerateFromAi([FromBody] GenerateFromAiRequest req, CancellationToken ct)
     {
-        var result = await _mediator.Send(new GeneratePresentationCommand(
-            req.TemplateId, req.Title, req.SlideJson, GenerationSource.AIPrompt, req.PromptUsed), ct);
-        return CreatedAtAction(nameof(GetById), new { id = result.Id }, result);
+        _logger.LogInformation("Template-aware AI generation triggered for template {TemplateId}", req.TemplateId);
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var slideJson = await _templateAwareAiService.GenerateAsync(
+            req.TemplateId,
+            req.Prompt,
+            req.Provider ?? "OpenRouter",
+            req.Model ?? "google/gemma-3n-e4b-it:free",
+            req.MaxSlides,
+            req.IncludeSpeakerNotes,
+            req.StrictSchema,
+            req.AllowedSlideTypes ?? new List<string> { "TitleSlide", "BulletSlide", "ChartSlide", "TableSlide" },
+            ct);
+        stopwatch.Stop();
+
+        var slideCount = 0;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(slideJson);
+            if (doc.RootElement.TryGetProperty("slides", out var slides))
+            {
+                slideCount = slides.GetArrayLength();
+            }
+            else if (doc.RootElement.TryGetProperty("Slides", out var legacySlides))
+            {
+                slideCount = legacySlides.GetArrayLength();
+            }
+        }
+        catch
+        {
+            slideCount = 0;
+        }
+
+        var result = new AiGenerationResult(
+            slideJson,
+            slideCount,
+            req.Model ?? "google/gemma-3n-e4b-it:free",
+            0,
+            stopwatch.Elapsed.TotalSeconds);
+
+        return Ok(result);
     }
     /// <summary>Delete a presentation</summary>
     [HttpDelete("{id:guid}")]
@@ -61,8 +124,17 @@ public class PresentationsController : ControllerBase
     }
 }
 
-public record GeneratePresentationRequest(Guid TemplateId, string Title, string SlideJson);
-public record GenerateFromAiRequest(Guid TemplateId, string Title, string SlideJson, string? PromptUsed);
+public record GeneratePresentationRequest(Guid TemplateId, string Title, string SlideJson, string? PromptUsed = null);
+public record GenerateFromAiRequest(
+    Guid TemplateId,
+    string Prompt,
+    string? Provider,
+    string? Model,
+    int MaxSlides = 15,
+    bool IncludeSpeakerNotes = false,
+    bool StrictSchema = true,
+    List<string>? AllowedSlideTypes = null
+);
 
 // ─── AI Controller ────────────────────────────────────────────────────────────
 [ApiController]

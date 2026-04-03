@@ -33,11 +33,13 @@ builder.Services.AddScoped<ITemplateService, TemplateService>();
 builder.Services.AddScoped<IPptxGeneratorService, PptxGeneratorService>();
 builder.Services.AddScoped<IAsposePromptPptxGeneratorService, AsposePromptPptxGeneratorService>();
 builder.Services.AddScoped<IAiOrchestratorService, AiOrchestratorService>();
+builder.Services.AddScoped<ITemplateAwareAiService, TemplateAwareAiService>();
 builder.Services.AddScoped<IPptxExtractorService, PptxExtractorService>();
 builder.Services.AddScoped<IStorageService, LocalStorageService>();
 builder.Services.AddScoped<IRuleEngineService, RuleEngineService>();
 builder.Services.AddScoped<IPptxScriptGeneratorService, PptxScriptGeneratorService>();
 builder.Services.AddScoped<ITemplateScaffoldGeneratorService, AsposeTemplateScaffoldService>();
+builder.Services.AddScoped<ISemanticModelNormalizer, SemanticModelNormalizer>();
 
 // ─── MediatR ─────────────────────────────────────────────────────────────────
 builder.Services.AddMediatR(cfg =>

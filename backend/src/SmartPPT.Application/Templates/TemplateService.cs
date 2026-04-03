@@ -14,17 +14,20 @@ public class TemplateService : ITemplateService
 {
     private readonly IUnitOfWork _uow;
     private readonly ITemplateScaffoldGeneratorService _scaffoldGenerator;
+    private readonly ISemanticModelNormalizer _semanticModelNormalizer;
     private readonly IConfiguration _configuration;
     private readonly IStorageService _storage;
 
     public TemplateService(
         IUnitOfWork uow,
         ITemplateScaffoldGeneratorService scaffoldGenerator,
+        ISemanticModelNormalizer semanticModelNormalizer,
         IConfiguration configuration,
         IStorageService storage)
     {
         _uow = uow;
         _scaffoldGenerator = scaffoldGenerator;
+        _semanticModelNormalizer = semanticModelNormalizer;
         _configuration = configuration;
         _storage = storage;
     }
@@ -43,6 +46,7 @@ public class TemplateService : ITemplateService
 
         TemplateFilesystem.WriteScaffoldJson(template, _configuration, scaffold.Json);
         TemplateFilesystem.WriteGeneratedScript(template, _configuration, scaffold.Script);
+        await NormalizeSemanticModelIfEnabledAsync(template);
         template.SetGeneratedScript(null, DateTime.UtcNow);
         await _uow.Templates.UpdateAsync(template);
         await _uow.SaveChangesAsync();
@@ -73,5 +77,19 @@ public class TemplateService : ITemplateService
                 )).ToList()
             )).ToList()
         );
+    }
+
+    private async Task NormalizeSemanticModelIfEnabledAsync(Domain.Entities.Template template)
+    {
+        if (!_configuration.GetValue<bool>("SemanticModel:EnableNormalization"))
+        {
+            return;
+        }
+
+        var storageBasePath = TemplateFilesystem.GetStorageBasePath(_configuration);
+        var rawScaffoldPath = TemplateFilesystem.GetScaffoldJsonFilePath(storageBasePath, template.ScaffoldPath!);
+        var cleanScaffoldPath = TemplateFilesystem.GetCleanScaffoldJsonFilePath(storageBasePath, template.ScaffoldPath!);
+
+        await _semanticModelNormalizer.NormalizeAsync(rawScaffoldPath, cleanScaffoldPath);
     }
 }

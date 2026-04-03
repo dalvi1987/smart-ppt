@@ -16,18 +16,21 @@ public class UploadTemplateHandler : IRequestHandler<UploadTemplateCommand, Temp
     private readonly ITemplateParserService _parser;
     private readonly IRuleEngineService _ruleEngine;
     private readonly ITemplateScaffoldGeneratorService _scaffoldGenerator;
+    private readonly ISemanticModelNormalizer _semanticModelNormalizer;
     private readonly IConfiguration _configuration;
     private readonly ILogger<UploadTemplateHandler> _logger;
 
     public UploadTemplateHandler(IUnitOfWork uow, ITemplateParserService parser,
         IRuleEngineService ruleEngine,
         ITemplateScaffoldGeneratorService scaffoldGenerator,
+        ISemanticModelNormalizer semanticModelNormalizer,
         IConfiguration configuration, ILogger<UploadTemplateHandler> logger)
     {
         _uow = uow;
         _parser = parser;
         _ruleEngine = ruleEngine;
         _scaffoldGenerator = scaffoldGenerator;
+        _semanticModelNormalizer = semanticModelNormalizer;
         _configuration = configuration;
         _logger = logger;
     }
@@ -83,6 +86,7 @@ public class UploadTemplateHandler : IRequestHandler<UploadTemplateCommand, Temp
 
             TemplateFilesystem.WriteScaffoldJson(template, _configuration, scaffold.Json);
             TemplateFilesystem.WriteGeneratedScript(template, _configuration, scaffold.Script);
+            await NormalizeSemanticModelIfEnabledAsync(template, ct);
             template.SetGeneratedScript(null, DateTime.UtcNow);
             _logger.LogInformation("Scaffold generation completed successfully for template {TemplateName}", template.Name);
         }
@@ -110,6 +114,20 @@ public class UploadTemplateHandler : IRequestHandler<UploadTemplateCommand, Temp
             )).ToList()
         )).ToList()
     );
+
+    private async Task NormalizeSemanticModelIfEnabledAsync(Template template, CancellationToken ct)
+    {
+        if (!_configuration.GetValue<bool>("SemanticModel:EnableNormalization"))
+        {
+            return;
+        }
+
+        var storageBasePath = TemplateFilesystem.GetStorageBasePath(_configuration);
+        var rawScaffoldPath = TemplateFilesystem.GetScaffoldJsonFilePath(storageBasePath, template.ScaffoldPath!);
+        var cleanScaffoldPath = TemplateFilesystem.GetCleanScaffoldJsonFilePath(storageBasePath, template.ScaffoldPath!);
+
+        await _semanticModelNormalizer.NormalizeAsync(rawScaffoldPath, cleanScaffoldPath, ct);
+    }
 }
 
 public class DeleteTemplateHandler : IRequestHandler<DeleteTemplateCommand, bool>

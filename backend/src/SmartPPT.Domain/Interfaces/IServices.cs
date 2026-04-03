@@ -15,12 +15,26 @@ public interface IPptxGeneratorService
 
 public interface IAsposePromptPptxGeneratorService
 {
-    Task<AsposePromptPptxGenerationResult> GenerateAsync(Template template, string userMessage, string outputFileName, CancellationToken ct = default);
+    Task<AsposePromptPptxGenerationResult> GenerateAsync(Template template, string slideJson, string outputFileName, CancellationToken ct = default);
 }
 
 public interface IAiOrchestratorService
 {
     Task<string> GenerateSlideJsonAsync(string prompt, AiGenerationOptions options);
+}
+
+public interface ITemplateAwareAiService
+{
+    Task<string> GenerateAsync(
+        Guid templateId,
+        string prompt,
+        string provider,
+        string model,
+        int maxSlides,
+        bool includeSpeakerNotes,
+        bool strictSchema,
+        List<string> allowedSlideTypes,
+        CancellationToken ct = default);
 }
 
 public interface IStorageService

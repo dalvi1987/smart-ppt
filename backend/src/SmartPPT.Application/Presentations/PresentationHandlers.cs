@@ -1,4 +1,5 @@
 using MediatR;
+using Microsoft.Extensions.Logging;
 using SmartPPT.Application.Templates.Commands;
 using SmartPPT.Domain.Entities;
 using SmartPPT.Domain.Enums;
@@ -52,14 +53,20 @@ public class GeneratePresentationHandler : IRequestHandler<GeneratePresentationC
     private readonly IPptxGeneratorService _generator;
     private readonly IAsposePromptPptxGeneratorService _asposeGenerator;
     private readonly IStorageService _storage;
+    private readonly ILogger<GeneratePresentationHandler> _logger;
 
     public GeneratePresentationHandler(
         IUnitOfWork uow,
         IPptxGeneratorService generator,
         IAsposePromptPptxGeneratorService asposeGenerator,
-        IStorageService storage)
+        IStorageService storage,
+        ILogger<GeneratePresentationHandler> logger)
     {
-        _uow = uow; _generator = generator; _asposeGenerator = asposeGenerator; _storage = storage;
+        _uow = uow;
+        _generator = generator;
+        _asposeGenerator = asposeGenerator;
+        _storage = storage;
+        _logger = logger;
     }
 
     public async Task<PresentationDto> Handle(GeneratePresentationCommand request, CancellationToken ct)
@@ -82,16 +89,26 @@ public class GeneratePresentationHandler : IRequestHandler<GeneratePresentationC
             var outputFileName = $"{presentation.Id}_{DateTime.UtcNow:yyyyMMddHHmmss}.pptx";
             string outputPath;
 
-            if (request.Source == GenerationSource.AIPrompt &&
-                !string.IsNullOrWhiteSpace(request.PromptUsed) &&
+            if (request.Source == GenerationSource.ManualJson &&
+                !string.IsNullOrWhiteSpace(request.SlideJson) &&
                 !string.IsNullOrWhiteSpace(template.ScaffoldPath))
             {
-                var generated = await _asposeGenerator.GenerateAsync(template, request.PromptUsed, outputFileName, ct);
+                _logger.LogInformation(
+                    "Aspose PPT generation triggered (no AI) for presentation {PresentationId} and template {TemplateId}",
+                    presentation.Id,
+                    request.TemplateId);
+
+                var generated = await _asposeGenerator.GenerateAsync(template, request.SlideJson, outputFileName, ct);
                 presentation.SetSlideJson(generated.GeneratedJson, generated.SlideCount);
                 outputPath = generated.OutputPath;
             }
             else
             {
+                _logger.LogInformation(
+                    "Using legacy PPT generator for presentation {PresentationId} and template {TemplateId}",
+                    presentation.Id,
+                    request.TemplateId);
+
                 outputPath = await _generator.GenerateAsync(request.TemplateId, request.SlideJson, outputFileName);
             }
 

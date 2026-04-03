@@ -92,7 +92,7 @@ export const presentationApi = {
     slideJson: string,
     promptUsed?: string,
   ) =>
-    request<Presentation>("/presentations/generate-from-ai", {
+    request<Presentation>("/presentations/generate", {
       method: "POST",
       body: JSON.stringify({ templateId, title, slideJson, promptUsed }),
     }),
@@ -104,7 +104,7 @@ export const presentationApi = {
 // ─── AI ───────────────────────────────────────────────────────────────────────
 export const aiApi = {
   generate: (req: AiGenerateRequest) =>
-    request<AiGenerationResult>("/ai/generate", {
+    request<AiGenerationResult>("/presentations/generate-from-ai", {
       method: "POST",
       body: JSON.stringify(req),
     }),

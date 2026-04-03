@@ -7,6 +7,7 @@ internal static class TemplateFilesystem
 {
     private const string ScaffoldFileName = "template.scaffold.js";
     private const string ScaffoldJsonFileName = "template.scaffold.json";
+    private const string CleanScaffoldJsonFileName = "clean_template.scaffold.json";
 
     public static string GetStorageBasePath(IConfiguration configuration) =>
         configuration["Storage:BasePath"] ?? Path.Combine(Path.GetTempPath(), "smartppt");
@@ -31,6 +32,9 @@ internal static class TemplateFilesystem
 
     public static string GetScaffoldJsonFilePath(string storageBasePath, string scaffoldPath) =>
         Path.Combine(GetArtifactsDirectory(storageBasePath, scaffoldPath), ScaffoldJsonFileName);
+
+    public static string GetCleanScaffoldJsonFilePath(string storageBasePath, string scaffoldPath) =>
+        Path.Combine(GetArtifactsDirectory(storageBasePath, scaffoldPath), CleanScaffoldJsonFileName);
 
     public static void EnsureTemplateDirectories(string storageBasePath, string scaffoldPath)
     {
