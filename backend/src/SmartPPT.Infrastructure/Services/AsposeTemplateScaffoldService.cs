@@ -58,24 +58,36 @@ public class AsposeTemplateScaffoldService : ITemplateScaffoldGeneratorService
 
         foreach (var shape in slide.Shapes)
         {
+            var shapeId = shape.UniqueId;
+
             try
             {
-                switch (shape)
+                LogDebug($"Processing shape: {shape.GetType().Name}, Id={shapeId}");
+
+                // FIX: ITable is not a subtype of IAutoShape or IChart — check it FIRST
+                // via the ShapeType enum, then cast. Putting it before the IAutoShape arm
+                // also prevents text inside table cells being picked up as placeholders.
+                if (shape is ITable table)
                 {
-                    case IAutoShape autoShape:
-                        ExtractPlaceholders(autoShape, placeholders);
-                        break;
-                    case IChart chart:
-                        charts.Add(ExtractChart(chart, chartIndex++));
-                        break;
-                    case ITable table:
-                        tables.Add(ExtractTable(table));
-                        break;
+                    tables.Add(ExtractTable(table));
+                }
+                else
+                {
+                    switch (shape)
+                    {
+                        case IChart chart:
+                            charts.Add(ExtractChart(chart, chartIndex++, shapeId.ToString()));
+                            break;
+
+                        case IAutoShape autoShape:
+                            ExtractPlaceholders(autoShape, placeholders, shapeId.ToString());
+                            break;
+                    }
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // Missing or malformed shapes are ignored so scaffold generation remains resilient.
+                LogDebug($"Shape failed (id={shapeId}): {ex.Message}");
             }
         }
 
@@ -89,7 +101,11 @@ public class AsposeTemplateScaffoldService : ITemplateScaffoldGeneratorService
         };
     }
 
-    private static void ExtractPlaceholders(IAutoShape autoShape, List<TemplateScaffoldPlaceholder> placeholders)
+    // -------------------------------------------------------------------------
+    // Placeholder extraction (text shapes)
+    // -------------------------------------------------------------------------
+
+    private static void ExtractPlaceholders(IAutoShape autoShape, List<TemplateScaffoldPlaceholder> placeholders, string shapeId)
     {
         if (autoShape.TextFrame is null)
         {
@@ -106,7 +122,13 @@ public class AsposeTemplateScaffoldService : ITemplateScaffoldGeneratorService
 
         foreach (var placeholder in ExtractPlaceholderEntries(fullText))
         {
-            placeholders.Add(placeholder);
+            placeholders.Add(new TemplateScaffoldPlaceholder
+            {
+                Key = placeholder.Key,
+                RawText = placeholder.RawText,
+                Type = "Text",
+                ShapeId = shapeId
+            });
             LogDebug($"Detected placeholder: key='{placeholder.Key}', raw='{placeholder.RawText}'");
         }
     }
@@ -189,44 +211,227 @@ public class AsposeTemplateScaffoldService : ITemplateScaffoldGeneratorService
         return builder.ToString();
     }
 
-    private static void LogDebug(string message)
-    {
-        Debug.WriteLine($"[AsposeTemplateScaffold] {message}");
-        Trace.WriteLine($"[AsposeTemplateScaffold] {message}");
-    }
+    // -------------------------------------------------------------------------
+    // Chart extraction
+    // -------------------------------------------------------------------------
 
-    private static TemplateScaffoldChart ExtractChart(IChart chart, int chartIndex)
+    private static TemplateScaffoldChart ExtractChart(IChart chart, int chartIndex, string shapeId)
     {
         var scaffold = new TemplateScaffoldChart
         {
             ChartIndex = chartIndex,
-            ChartType = chart.Type.ToString()
+            ShapeId = shapeId,
+            ChartType = MapChartType(chart.Type),
+            Key = $"chart_{chartIndex + 1}"
         };
 
-        foreach (IChartCategory category in chart.ChartData.Categories)
+        // --- Title -----------------------------------------------------------
+        // FIX: TextFrameForOverriding is only non-null when the title text has
+        // been explicitly overridden in the slide (i.e. not linked to the sheet).
+        // When the title comes from the embedded workbook — which is the common
+        // case — TextFrameForOverriding is null. Use it first; fall back to the
+        // read-only TextFrame on the same object.
+        try
         {
-            scaffold.Categories.Add(category.Value?.ToString() ?? string.Empty);
+            if (chart.HasTitle && chart.ChartTitle != null)
+            {
+                var textFrame = chart.ChartTitle.TextFrameForOverriding;
+                             //?? chart.ChartTitle.TextFrame; // <-- FIX: fallback
+
+                if (textFrame != null)
+                {
+                    var titleText = ReadTextFrameText(textFrame);
+                    LogDebug($"Chart title text: '{titleText}'");
+
+                    var titleKey = ExtractPlaceholderEntries(titleText)
+                        .Select(p => p.Key)
+                        .FirstOrDefault();
+
+                    if (!string.IsNullOrWhiteSpace(titleKey))
+                    {
+                        scaffold.TitleKey = titleKey;
+                        scaffold.Key = $"{titleKey}_chart";
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            LogDebug($"Chart title error: {ex.Message}");
         }
 
-        foreach (IChartSeries series in chart.ChartData.Series)
+        // --- Categories ------------------------------------------------------
+        // FIX: category.Value is a ChartDataCell, not a string.
+        // The plain .ToString() gives you a type name, not the cell content.
+        // Use AsLiteralString for static values, or read the cell Value property.
+        try
         {
-            var scaffoldSeries = new TemplateScaffoldSeries
+            foreach (IChartCategory category in chart.ChartData.Categories)
             {
-                Name = series.Name?.AsLiteralString
-                    ?? series.Name?.ToString()
-                    ?? "Series"
-            };
+                var raw = ReadCategoryText(category);
+                LogDebug($"Chart category raw: '{raw}'");
 
-            foreach (IChartDataPoint point in series.DataPoints)
-            {
-                scaffoldSeries.Values.Add(point.Value?.Data?.ToString() ?? string.Empty);
+                var keys = ExtractPlaceholderEntries(raw).Select(p => p.Key).ToList();
+                if (keys.Count > 0)
+                {
+                    scaffold.Categories.AddRange(keys);
+                }
+                else if (!string.IsNullOrWhiteSpace(raw))
+                {
+                    // Not a placeholder — store the literal value so the scaffold
+                    // still reflects real category labels.
+                    scaffold.Categories.Add(raw.Trim());
+                }
             }
+        }
+        catch (Exception ex)
+        {
+            LogDebug($"Chart category error: {ex.Message}");
+        }
 
-            scaffold.Series.Add(scaffoldSeries);
+        // --- Series ----------------------------------------------------------
+        // FIX: Also extract data-point values so Values list is populated.
+        // For template scaffolding we collect placeholder keys from both the
+        // series name and each data-point value cell.
+        try
+        {
+            foreach (IChartSeries series in chart.ChartData.Series)
+            {
+                var seriesName = ReadSeriesName(series, scaffold.Series.Count);
+                var seriesEntry = new TemplateScaffoldSeries { Name = seriesName };
+
+                foreach (IChartDataPoint point in series.DataPoints)
+                {
+                    var cellText = ReadDataPointText(point);
+                    if (string.IsNullOrWhiteSpace(cellText))
+                    {
+                        continue;
+                    }
+
+                    var keys = ExtractPlaceholderEntries(cellText).Select(p => p.Key).ToList();
+                    if (keys.Count > 0)
+                    {
+                        seriesEntry.Values.AddRange(keys);
+                    }
+                    else
+                    {
+                        seriesEntry.Values.Add(cellText.Trim());
+                    }
+                }
+
+                scaffold.Series.Add(seriesEntry);
+                LogDebug($"Series '{seriesName}' with {seriesEntry.Values.Count} data points");
+            }
+        }
+        catch (Exception ex)
+        {
+            LogDebug($"Chart series error: {ex.Message}");
         }
 
         return scaffold;
     }
+
+    /// <summary>
+    /// Safely reads a category label from an IChartCategory.
+    /// IChartCategory has two storage modes controlled by UseCell:
+    ///   UseCell=true  → value lives in AsCell (IChartDataCell, worksheet-backed)
+    ///   UseCell=false → value lives in AsLiteral (plain object, typically a string)
+    /// The unified Value property returns whichever one is active.
+    /// </summary>
+    private static string ReadCategoryText(IChartCategory category)
+    {
+        try
+        {
+            // Value is the single safe read — it returns AsCell.Value when UseCell
+            // is true, and AsLiteral when UseCell is false.
+            var raw = category.Value;
+            if (raw != null)
+            {
+                return raw.ToString() ?? string.Empty;
+            }
+        }
+        catch { /* ignore */ }
+
+        return string.Empty;
+    }
+
+    /// <summary>
+    /// Safely reads a series name.
+    /// IStringChartValue.AsLiteralString is set when the name is a literal (not
+    /// worksheet-backed). For worksheet-backed names, ToString() on the value
+    /// object returns the resolved display string — that is the safe fallback
+    /// for both modes because Aspose overrides ToString() on IStringChartValue.
+    /// </summary>
+    private static string ReadSeriesName(IChartSeries series, int fallbackIndex)
+    {
+        try
+        {
+            // AsLiteralString is non-null/non-empty when DataSourceType == StringLiterals
+            if (!string.IsNullOrWhiteSpace(series.Name?.AsLiteralString))
+            {
+                return series.Name.AsLiteralString;
+            }
+        }
+        catch { /* not a literal */ }
+
+        try
+        {
+            // ToString() is overridden on IStringChartValue and returns the
+            // resolved string for both literal and worksheet-backed names.
+            var name = series.Name?.ToString();
+            if (!string.IsNullOrWhiteSpace(name))
+            {
+                return name;
+            }
+        }
+        catch { /* ignore */ }
+
+        return $"Series {fallbackIndex + 1}";
+    }
+
+    /// <summary>
+    /// Reads the numeric value from a chart data point as a string, for
+    /// placeholder scanning. YValue is IDoubleChartValue; its AsCell property
+    /// gives an IChartDataCell whose Value is the raw object (typically double).
+    /// </summary>
+    private static string ReadDataPointText(IChartDataPoint point)
+    {
+        try
+        {
+            var cell = point.YValue?.AsCell;
+            if (cell?.Value != null)
+            {
+                return cell.Value.ToString() ?? string.Empty;
+            }
+        }
+        catch { /* ignore */ }
+
+        return string.Empty;
+    }
+
+    private static string MapChartType(ChartType chartType)
+    {
+        var type = chartType.ToString();
+
+        if (type.Contains("Pie", StringComparison.OrdinalIgnoreCase))
+            return "pie";
+
+        if (type.Contains("Area", StringComparison.OrdinalIgnoreCase))
+            return "area";
+
+        if (type.Contains("Line", StringComparison.OrdinalIgnoreCase))
+            return "line";
+
+        if (type.Contains("Scatter", StringComparison.OrdinalIgnoreCase)
+            || type.Contains("Bubble", StringComparison.OrdinalIgnoreCase))
+            return "scatter";
+
+        return "bar";
+    }
+
+    // -------------------------------------------------------------------------
+    // Table extraction
+    // -------------------------------------------------------------------------
 
     private static TemplateScaffoldTable ExtractTable(ITable table)
     {
@@ -250,6 +455,10 @@ public class AsposeTemplateScaffoldService : ITemplateScaffoldGeneratorService
             Rows = rows
         };
     }
+
+    // -------------------------------------------------------------------------
+    // Script generation
+    // -------------------------------------------------------------------------
 
     private static string BuildScript(TemplateScaffold scaffold)
     {
@@ -276,5 +485,11 @@ public class AsposeTemplateScaffoldService : ITemplateScaffoldGeneratorService
         builder.AppendLine();
         builder.AppendLine("module.exports = templateScaffold;");
         return builder.ToString();
+    }
+
+    private static void LogDebug(string message)
+    {
+        Debug.WriteLine($"[AsposeTemplateScaffold] {message}");
+        Trace.WriteLine($"[AsposeTemplateScaffold] {message}");
     }
 }

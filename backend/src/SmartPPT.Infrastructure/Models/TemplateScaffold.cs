@@ -28,12 +28,16 @@ public class TemplateScaffoldPlaceholder
     public string Key { get; set; } = string.Empty;
     public string RawText { get; set; } = string.Empty;
     public string Type { get; set; } = "Text";
+    public string ShapeId { get; set; } = string.Empty;
 }
 
 public class TemplateScaffoldChart
 {
     public int ChartIndex { get; set; }
+    public string Key { get; set; } = string.Empty;
+    public string ShapeId { get; set; } = string.Empty;    
     public string ChartType { get; set; } = string.Empty;
+    public string? TitleKey { get; set; }
     public List<string> Categories { get; set; } = new();
     public List<TemplateScaffoldSeries> Series { get; set; } = new();
 }
