@@ -243,26 +243,37 @@ public class AsposePromptPptxGeneratorService : IAsposePromptPptxGeneratorServic
 
     private static void ApplyChartContent(IChart chart, TemplateScaffoldChart chartContent)
     {
-        var workbook = chart.ChartData.ChartDataWorkbook;
-        chart.ChartData.Series.Clear();
-        chart.ChartData.Categories.Clear();
+        var chartData = chart.ChartData;
 
-        for (var categoryIndex = 0; categoryIndex < chartContent.Categories.Count; categoryIndex++)
+        // ✅ DO NOT CLEAR → preserve formatting
+        if (chartData.Series.Count == 0)
+            return;
+
+        var series = chartData.Series[0];
+
+        var categoryCount = Math.Min(chartData.Categories.Count, chartContent.Categories.Count);
+        var valueCount = Math.Min(series.DataPoints.Count, chartContent.Series[0].Values.Count);
+
+        // ✅ Update categories (labels)
+        for (int i = 0; i < categoryCount; i++)
         {
-            chart.ChartData.Categories.Add(workbook.GetCell(0, categoryIndex + 1, 0, chartContent.Categories[categoryIndex]));
+            chartData.Categories[i].Value = chartContent.Categories[i];
         }
 
-        for (var seriesIndex = 0; seriesIndex < chartContent.Series.Count; seriesIndex++)
+        // ✅ Update values (THIS preserves color per slice)
+        for (int i = 0; i < valueCount; i++)
         {
-            var seriesContent = chartContent.Series[seriesIndex];
-            var series = chart.ChartData.Series.Add(
-                workbook.GetCell(0, 0, seriesIndex + 1, seriesContent.Name),
-                chart.Type);
+            var numericValue = ParseNumericValue(chartContent.Series[0].Values[i]);
 
-            for (var valueIndex = 0; valueIndex < seriesContent.Values.Count; valueIndex++)
+            var point = series.DataPoints[i];
+
+            if (chart.Type == ChartType.Pie || chart.Type == ChartType.ExplodedPie)
             {
-                var numericValue = ParseNumericValue(seriesContent.Values[valueIndex]);
-                AddDataPoint(series, chart.Type, workbook, valueIndex + 1, seriesIndex + 1, numericValue);
+                point.Value.AsCell.Value = numericValue;
+            }
+            else
+            {
+                point.Value.AsCell.Value = numericValue;
             }
         }
     }
